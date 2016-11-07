@@ -1,0 +1,295 @@
+##Kaggle challenge: Allstate Purchase Prediction Challenge
+##Author: Meijian Guan
+R
+library("plyr", lib.loc="C:/Program Files/R/R-3.3.0/library")
+library("ggplot2", lib.loc="C:/Program Files/R/R-3.3.0/library")
+library("stringr", lib.loc="C:/Program Files/R/R-3.3.0/library")
+
+##Read in train and test data sets and replace possible "NA" with NA
+train<-read.csv("train.csv",header=T,sep=",",as.is=T)
+train[train=="NA"]<-NA
+test<-read.csv("test_v2.csv",header=T,sep=",",as.is=T)
+test[test=="NA"]<-NA
+
+##For training data, create a data set trainEnd only containing purchase point for each customer.
+##For test data, create a data set testFinal only including the final quote
+trainEnd<-train[train$record_type==1,]
+testFinal<-ddply(test,"customer_ID",
+	function(x){
+	finalTime=x[which.min(x[,2]),] 
+		}
+	)
+
+##Check the missing values for all columns in trainEnd
+sapply(trainEnd, function(x) sum(is.na(x)))
+sapply(testFinal, function(x) sum(is.na(x)))
+##Add a column to indicate how many quotes were taken by a customer before purchasing a policy in training data
+trainEnd$quoteTimes<-trainEnd$shopping_pt - 1
+
+##Create a new function hist() to generate histograms using ggplot2
+
+hist<-function(data,name,orig,bin){
+	hist<-qplot(data, 
+		geom="histogram",binwidth=bin,
+		main=paste("Histogram of",name,"in",orig),xlab=name,
+		ylab="Count",fill=I("blue"),col=I("red"))
+	return(hist)
+}
+
+##Generate histogram of quote times for trainEnd and testFinal
+hist(trainEnd$quoteTimes,"quote times","train",1)
+hist(testFinal$shopping_pt,"quote times","test",1)
+
+##Extract customer_ID and time column from train to create a new column indicating the length of time taken by a customer before making a decision
+timeTran<-train[c(1,2,5)]
+timeTest<-test[c(1,2,5)]
+
+##Implement a new function timeGenerator(), which can be used to calculate the length of time used by each customer before purchasing a policy
+timeGenerator <-function (data){
+	tmp1<-do.call(rbind,str_split(as.character(data$time),':'))
+	tmp1<-data.frame(tmp1)
+	colnames(tmp1)<-c("hour","minutes")
+	tmp1$minutesNew<-as.integer(tmp1$minutes)/60
+	tmp1$timeNew<-as.integer(as.character(tmp1$hour))+as.numeric(tmp1$minutesNew)
+	data<-data.frame(data,tmp1$timeNew)
+	
+	tmp2<-ddply(data,"customer_ID",
+	function(x){
+	firstTime=x[which.min(x[,2]),4] 
+	finalTime=x[which.max(x[,2]),4]
+	Length=finalTime-firstTime
+	del<-ifelse(Length>=0,Length,as.numeric(as.character(Length))+24)
+	data.frame(timeLen=del)
+		}
+	)
+	return (tmp2)
+}
+
+##Calculate the length of time for training data using timeGenerator() function and merge it to trainEnd
+timeLen_train<-timeGenerator(timeTrain)
+del<-merge(trainEnd,timeLen_train,by="customer_ID",sort=F)
+trainEnd<-del
+rm(del)
+
+##Calculate the length of time for test data using timeGenerator() function and merge it to testFinal
+timeLen_test<-timeGenerator(timeTest)
+del<-merge(testFinal,timeLen_test,by="customer_ID",sort=F)
+testFinal<-del
+rm(del)
+
+##Generate histogram of timeLen for both trainEnd and testFinal
+hist(trainEnd$timeLen,"time length","train",1)
+hist(testFinal$timeLen,"time length","test",1)
+
+##Generate histogram of day for both trainEnd and testFinal
+hist(trainEnd$day,"day","train",1)
+hist(testFinal$day,"day","test",1)
+##Convert day to dayBinary, with weekdays coded as 1 (0-4) and weekends coded as 0 (5,6).
+trainEnd$dayBinary<-ifelse(trainEnd$day %in% 0:4,1,0)
+testFinal$dayBinary<-ifelse(testFinal$day %in% 0:4,1,0)
+
+##Create a new function stateNum() which can return a list of two elements: 
+##1. A data.frame including state names and numeric ID for each states; 
+##2. A bar plot to indicate the frequency of each state.
+stateNum<-function(data,orig){
+
+	states<-data.frame(table(data))
+	colnames(states)<-c("state","count")
+	states<-states[order(states$state),]
+	
+	##create bar plot
+	bp<-ggplot(data=states, aes(x=state, y=count, color=state)) +
+		geom_bar(stat="identity", fill="white") +
+		scale_x_discrete(limits=states$state) +
+		coord_flip() +
+		theme(axis.text=element_text(size=8),legend.title=element_text(size=9,face = "italic"))+
+		ggtitle(paste("Bar plot of state count in",orig,sep=" "))
+
+	##Create a set of categorical values for states and merge them to trainEnd
+	states$stateID<-1:nrow(states)
+	states<-states[-2]
+	return (list(states,bp))
+}
+
+##Call stateNum() to create a bar plot for state in trainEnd data and return a set of categorical id
+##Merge the state ID to trainEnd
+output<-stateNum(trainEnd$state,"train")
+del<-merge(trainEnd,output[[1]],by="state",sort=F)
+trainEnd<-del
+rm(del)
+
+##Call stateNum() to create a bar plot for state in testFinal data and return a set of categorical id
+##Merge the state ID to testFinal
+output<-stateNum(testFinal$state,"test")
+del<-merge(testFinal,output[[1]],by="state",sort=F)
+testFinal<-del
+rm(del)
+
+##Remove individuals with empty car value in testFinal
+testFinal<-testFinal[!(testFinal$car_value %in% letters),]
+##Create a categorical variable to represent car_value, and make a hostogram to check the distribution of car values
+
+valueGen<-function (data){
+	value<-data.frame(table(data$car_value))
+	colnames(value)<-c("CarValue","count")
+	value<-value[order(as.character(value$CarValue)),]
+	value$car_value_categ<-1:nrow(value)
+	value<-value[-2]
+	tmp<-merge(data,value,by.x="car_value",by.y="CarValue",sort=F)
+	return (tmp)
+}
+trainEnd<-valueGen(trainEnd)
+testFinal<-valueGen(testFinal)
+
+##Create a new column risk_factor_mean to replace missing values with average risk_factor in both train and test
+##Calculate mean of risk_factor
+summary(trainEnd$risk_factor)
+summary(testFinal$risk_factor)
+##Create new column risk_factor_mean
+trainEnd$risk_factor_mean<-ifelse(is.na(trainEnd$risk_factor),2.56,trainEnd$risk_factor)
+testFinal$risk_factor_mean<-ifelse(is.na(testFinal$risk_factor),2.56,testFinal$risk_factor)
+
+##To replace missing values in C_previous and duration_previous in both train and test
+trainEnd$C_previous_new<-ifelse(is.na(trainEnd$C_previous),0,trainEnd$C_previous)
+trainEnd$duration_previous_new<-ifelse(is.na(trainEnd$duration_previous),0,trainEnd$duration_previous)
+
+testFinal$C_previous_new<-ifelse(is.na(testFinal$C_previous),0,testFinal$C_previous)
+testFinal$duration_previous_new<-ifelse(is.na(testFinal$duration_previous),0,testFinal$duration_previous)
+
+##Create a new column cost_avg to calculate the average cost of the policies the customer quoted
+##For test data
+tmp<-ddply(test,"customer_ID",
+	summarise,
+	cost_avg=mean(cost)
+)
+del<-merge(testFinal,tmp,by="customer_ID",sort=F)
+testFinal<-del
+rm(del)
+rm(tmp)
+##For train data
+tmp<-ddply(train,"customer_ID",
+	summarise,
+	cost_avg=mean(cost)
+)
+del<-merge(trainEnd,tmp,by="customer_ID",sort=F)
+trainEnd<-del
+rm(del)
+rm(tmp)
+
+##Create histograms for car_age, age_oldest, age_youngest in both train and test
+hist(testFinal$car_age,"car age","test",1)
+hist(trainEnd$car_age,"car age","train",1)
+
+hist(testFinal$age_oldest,"age oldest","test",1)
+hist(trainEnd$age_oldest,"age oldest","train",1)
+
+hist(testFinal$age_youngest,"age youngest","test",1)
+hist(trainEnd$age_youngest,"age youngest","train",1)
+
+##Create a new function MeanNorm() to perform mean normalization
+MeanNorm<-function(data){
+	tmp<-(data-mean(data))/max(data)-min(data)
+	return(tmp)
+}
+##Call MeanNorm() function to perform mean normalization for both train and test data sets
+trainEnd$car_age_norm<-MeanNorm(trainEnd$car_age)
+trainEnd$age_oldest_norm<-MeanNorm(trainEnd$age_oldest)
+trainEnd$age_youngest_norm<-MeanNorm(trainEnd$age_youngest)
+trainEnd$cost_avg_norm<-MeanNorm(trainEnd$cost_avg)
+trainEnd$timeLen_norm<-MeanNorm(trainEnd$timeLen)
+trainEnd$duration_previous_norm<-MeanNorm(trainEnd$duration_previous_new)
+
+testFinal$car_age_norm<-MeanNorm(testFinal$car_age)
+testFinal$age_oldest_norm<-MeanNorm(testFinal$age_oldest)
+testFinal$age_youngest_norm<-MeanNorm(testFinal$age_youngest)
+testFinal$cost_avg_norm<-MeanNorm(testFinal$cost_avg)
+testFinal$timeLen_norm<-MeanNorm(testFinal$timeLen)
+testFinal$duration_previous_norm<-MeanNorm(testFinal$duration_previous_new)
+
+##Create a new column containing the final quote for train. Test already has the final quotes in the data
+##train
+tmp<-ddply(train,"customer_ID",
+	function(x){
+	finalQuote=x[(which.max(x[,2])-1),18:24]
+	}
+)
+colnames(tmp)<-c("customer_ID","A_f","B_f","C_f","D_f","E_f","F_f","G_f")
+del<-merge(trainEnd,tmp,by="customer_ID")
+trainEnd<-del
+rm(del)
+
+##Generate clean data sets for next step analysis
+##Trimming data to keep only policy columns
+testClean<-testFinal[c(1,8,9,10,15,4,27,30,28,29,33,32,34:37,39:46,18:24)]
+trainClean<-trainEnd[c(1,8,9,10,15,26,28,29,30,31,32,34:38,18:24)]
+target<-trainClean[,25:31]
+
+##Create matrices with columns indicating categories for each policy. 
+##E.g. 1s in first, second and third column indicating first, second and third class, others are indicated as 0
+yA=data.frame(A=target$A)
+yA$C1=ifelse(yA$A==0,1,0)
+yA$C2=ifelse(yA$A==1,1,0)
+yA$C3=ifelse(yA$A==2,1,0)
+write.table(yA,"yA.txt",col.names = F,row.names = F,quote = F)
+
+yB=data.frame(B=target$B)
+yB$C1=ifelse(yB$B==0,1,0)
+yB$C2=ifelse(yB$B==1,1,0)
+write.table(yB,"yB.txt",col.names = F,row.names = F,quote=F)
+
+yC=data.frame(C=target$C)
+yC$C1=ifelse(yC$C==1,1,0)
+yC$C2=ifelse(yC$C==2,1,0)
+yC$C3=ifelse(yC$C==3,1,0)
+yC$C4=ifelse(yC$C==4,1,0)
+write.table(yC,"yC.txt",col.names = F,row.names = F,quote=F)
+
+yD=data.frame(D=target$D)
+yD$C1=ifelse(yD$D==1,1,0)
+yD$C2=ifelse(yD$D==2,1,0)
+yD$C3=ifelse(yD$D==3,1,0)
+write.table(yD,"yD.txt",col.names = F,row.names = F,quote=F)
+
+yE=data.frame(E=target$E)
+yE$C1=ifelse(yE$E==0,1,0)
+yE$C2=ifelse(yE$E==1,1,0)
+write.table(yE,"yE.txt",col.names = F,row.names = F,quote=F)
+
+yF=data.frame(F=target$F)
+yF$C1=ifelse(yF$F==0,1,0)
+yF$C2=ifelse(yF$F==1,1,0)
+yF$C3=ifelse(yF$F==2,1,0)
+yF$C4=ifelse(yF$F==3,1,0)
+write.table(yF,"yF.txt",col.names = F,row.names = F,quote=F)
+
+yG=data.frame(G=target$G)
+yG$C1=ifelse(yG$G==1,1,0)
+yG$C2=ifelse(yG$G==2,1,0)
+yG$C3=ifelse(yG$G==3,1,0)
+yG$C4=ifelse(yG$G==4,1,0)
+write.table(yG,"yG.txt",col.names = F,row.names = F,quote=F)
+
+##Read prediction results from matlab and reformate and combine them into one file
+predA<-read.table("predictionA.txt",header=F,as.is =T)
+predB<-read.table("predictionB.txt",header=F,as.is =T)
+predC<-read.table("predictionC.txt",header=F,as.is =T)
+predD<-read.table("predictionD.txt",header=F,as.is =T)
+predE<-read.table("predictionE.txt",header=F,as.is =T)
+predF<-read.table("predictionF.txt",header=F,as.is =T)
+predG<-read.table("predictionG.txt",header=F,as.is =T)
+
+#Since the matlab start indicate classes from 1, some policies need to be changed starting from 0
+predA$V1<-0
+predB$V2<-ifelse(predB$V1==1,0,1)
+predB<-predB[2]
+predE$V2<-ifelse(predE$V1==1,0,1)
+predF$V1<-0
+predE<-predE[2]
+customer_ID<-testClean[1]
+#Combine all 7 policies to one big file and export it
+predFinal<-data.frame(customer_ID=id$V1,A=predA$V1,B=predB$V2,C=predC$V1,D=predD$V1,E=predE$V2,F=predF$V1,G=predG$V1)
+predFinal$plan<-paste(predFinal$A,predFinal$B,predFinal$C,predFinal$D,predFinal$E,predFinal$F,predFinal$G,sep="")
+write.table(predFinal,"Test_prediction.txt",col.names = T,row.names = F,quote = F,sep="\t")
+
+
+
